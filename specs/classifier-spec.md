@@ -91,10 +91,20 @@ the format below:" followed by the output format you chose.
 **What output format should you request from the LLM?**
 
 ```
-[blank — you need to parse the response in classify_episode(). What format
-makes parsing reliable? Think about: a single label on its own line?
-A structured format like "Label: X / Reasoning: Y"? JSON?
-What are the tradeoffs?]
+Request two keyed lines, in this exact order:
+
+Label: <one of: interview, solo, panel, narrative>
+Reasoning: <one or two sentences>
+
+Tradeoffs considered:
+- Bare label on its own line: trivial to parse, but discards the reasoning
+  the return dict requires.
+- JSON: structurally clean, but llama-3.3-70b often wraps it in ```json
+  fences or adds a preamble ("Here is the classification:"). A single stray
+  character breaks json.loads, forcing fence-stripping plus try/except.
+- Keyed lines (chosen): tolerant of surrounding prose and whitespace. Parse
+  by scanning lines case-insensitively for the one starting with "label:"
+  and "reasoning:", then split on the first ":". Gives both fields cleanly.
 ```
 
 ---
@@ -102,8 +112,18 @@ What are the tradeoffs?]
 **Edge cases to handle in the prompt:**
 
 ```
-[blank — what if labeled_examples is empty? What if the description is very
-short? How does your prompt handle these?]
+- Empty labeled_examples: degrade to zero-shot. Still emit the task
+  instructions and the four label definitions, but skip the examples
+  section entirely rather than emitting an empty/garbled "Examples:" block
+  that would confuse the model.
+- Very short or thin description: still send it. The label definitions plus
+  the keyed output format push the model to commit to a best-guess label
+  instead of refusing; if it returns junk, classify_episode() validation
+  maps it to "unknown".
+- Description that itself contains "Label:" or the "---" delimiter: wrap the
+  to-classify description in a clearly demarcated block (e.g. its own
+  "Episode to classify:" header) so it is not mistaken for an example or a
+  separator.
 ```
 
 ---
@@ -159,9 +179,17 @@ Extract the response text from:
 **Step 3 — Parse the response:**
 
 ```
-[blank — how do you extract the label and reasoning from the LLM's text output?
-What string operations or parsing logic do you need?
-This depends on the output format you chose in build_few_shot_prompt.]
+The prompt requests two keyed lines: "Label: X" and "Reasoning: Y".
+
+Parse by:
+1. Split the response text into lines.
+2. For each line, strip() it and lowercase a copy to test the prefix.
+3. The line starting with "label:" -> take everything after the first ":",
+   strip(), lowercase() -> candidate label.
+4. The line starting with "reasoning:" -> take everything after the first
+   ":", strip() (keep original case) -> reasoning.
+5. If no "reasoning:" line is found, fall back to the full response text so
+   we never lose the model's explanation.
 ```
 
 ---
@@ -169,8 +197,10 @@ This depends on the output format you chose in build_few_shot_prompt.]
 **Step 4 — Validate the label:**
 
 ```
-[blank — what do you do if the LLM returns a label that isn't in VALID_LABELS?
-What should label be set to?]
+Compare the parsed candidate label (already lowercased and stripped) against
+VALID_LABELS. If it is one of them, use it. Otherwise set label to "unknown".
+This catches the model inventing a label, adding punctuation, or returning a
+malformed/empty line. The reasoning is kept regardless so we can inspect why.
 ```
 
 ---
@@ -178,9 +208,16 @@ What should label be set to?]
 **Step 5 — Handle errors gracefully:**
 
 ```
-[blank — what could go wrong? (Network error? Unparseable response?)
-What should the function return if something fails?
-Hint: the evaluation loop runs 20 calls — one bad response shouldn't crash everything.]
+Wrap the LLM call and parsing in a try/except. Things that can go wrong:
+- Network/API error, timeout, rate limit, bad API key (raises from the client).
+- Empty or None response content.
+- A response with no parseable "Label:" line (handled by the "unknown"
+  fallback, not an exception).
+
+On any exception, return a well-formed dict so the eval loop never crashes:
+  {"label": "unknown", "reasoning": f"Error: {e}"}
+One bad response degrades to a single "unknown" row instead of aborting all
+20 calls.
 ```
 
 ---

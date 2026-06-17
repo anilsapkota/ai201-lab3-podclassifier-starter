@@ -58,7 +58,14 @@ def compute_accuracy(predictions: list[str], ground_truth: list[str]) -> float:
 
     Before writing code, complete specs/evaluation-spec.md.
     """
-    return 0.0
+    # Edge case: no episodes -> nothing to score, avoid ZeroDivisionError.
+    if not predictions:
+        return 0.0
+
+    correct = sum(
+        1 for pred, truth in zip(predictions, ground_truth) if pred == truth
+    )
+    return correct / len(predictions)
 
 
 def compute_per_class_accuracy(
@@ -83,7 +90,31 @@ def compute_per_class_accuracy(
 
     Before writing code, complete specs/evaluation-spec.md.
     """
-    return {label: {"correct": 0, "total": 0, "accuracy": 0.0} for label in VALID_LABELS}
+    # Step 1 — initialize stats for every valid label.
+    stats = {
+        label: {"correct": 0, "total": 0, "accuracy": 0.0}
+        for label in VALID_LABELS
+    }
+
+    # Steps 2-3 — tally by ground-truth class.
+    for pred, truth in zip(predictions, ground_truth):
+        # Defensive: only score classes we know about (ground truth should
+        # always be a valid label).
+        if truth not in stats:
+            continue
+        stats[truth]["total"] += 1
+        if pred == truth:
+            stats[truth]["correct"] += 1
+
+    # Step 4 — compute per-class accuracy, guarding against total == 0.
+    for label_stats in stats.values():
+        total = label_stats["total"]
+        label_stats["accuracy"] = (
+            label_stats["correct"] / total if total else 0.0
+        )
+
+    # Step 5 — return the stats dict.
+    return stats
 
 
 def format_evaluation_report(eval_results: dict) -> str:
